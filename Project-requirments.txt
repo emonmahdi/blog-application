@@ -1,0 +1,516 @@
+# পূর্ণ-পর্যায় Blog Application (Next.js + TypeScript frontend + Node/Express + MongoDB) — A→Z গাইড (বাংলায়)
+
+দারুণ সিদ্ধান্ত — এই প্রজেক্টটি পুরোপুরি করলে তুমি শুধু কোড শিখবে না, বরং **production-ready** আর্কিটেকচার, নিরাপত্তা, ডেপ্লয়মেন্ট ও সাক্ষাৎকারে বলার মতো বাস্তব অভিজ্ঞতা পাবা। নিচে আমি সম্পূর্ণ, প্র্যাকটিকাল, ও 단계ভিত্তিক গাইড দিলাম — কোড স্নিপেট, ফাইল-স্ট্রাকচার, API, DB স্কিমা, ডিপ্লয়, টেস্ট, এবং কিভাবে résumé-তে লিখবে — সবকিছুই বাংলা-তে।
+
+---
+
+# 1) Project Overview — কি বানাবো
+
+একটি পেশাদার ব্লগ/পাবলিশিং প্ল্যাটফর্ম যেখানে থাকবে:
+
+* পাবলিক ব্লগ লিস্টিং ও পোস্ট পেজ (SEO-optimized)
+* রিচ টেক্সট/মার্কডাউন ইডিটর (Admin)
+* Authentication (Register/Login, Role: admin, author, reader)
+* Posts CRUD (drafts, publish, schedule)
+* Tags, Categories, Search, Pagination
+* Image/media upload (Cloudinary / S3)
+* Comments (optional: threaded, moderation)
+* Admin Dashboard (post management, users, metrics)
+* Analytics, rate-limit, logging, error tracking
+* Tests, CI/CD, Dockerized, production deploy (frontend Vercel, backend Render/Railway/Heroku or container hosts)
+
+---
+
+# 2) Tech Stack (প্রস্তাবিত)
+
+* Frontend: **Next.js (App Router) + TypeScript + Tailwind CSS**
+* State / Data fetching: **React Query (tanstack)** বা **SWR**
+* Rich editor: **Tiptap** অথবা **react-quill** (content save as HTML or Markdown)
+* Backend: **Node.js + Express + TypeScript**
+* Database: **MongoDB (Atlas) + Mongoose** (আপনি প্রিফার করলে PostgreSQL + Prisma ব্যবহার করতে পারেন)
+* Auth: HTTP-Only cookies with JWT (refresh token) or secure session (express-session + Redis)
+* File storage: **Cloudinary** (সহজ) অথবা **AWS S3**
+* Validation: **zod** (frontend & backend shareable schemas)
+* Tests: **Jest + Supertest (backend)**, **Vitest / React Testing Library (frontend)**
+* Logging & errors: **winston/pino** + **Sentry**
+* CI/CD: **GitHub Actions** -> Vercel (frontend), Render/Railway (backend) / Docker deploy
+* Containerization: **Docker & docker-compose** (local with MongoDB)
+
+---
+
+# 3) Repo Structure (monorepo/simple two-folder)
+
+**simple (single repo, two folders):**
+
+```
+blog-project/
+├─ client/                # Next.js app (frontend)
+├─ server/                # Express API (backend)
+├─ docker-compose.yml
+├─ .env.example
+└─ README.md
+```
+
+**client (suggested)**
+
+```
+client/
+├─ package.json
+├─ next.config.js
+├─ src/
+│  ├─ app/                # App Router pages + layout
+│  ├─ components/
+│  ├─ hooks/
+│  ├─ lib/                # api client, utils
+│  ├─ types/
+│  └─ styles/
+```
+
+**server (suggested)**
+
+```
+server/
+├─ package.json
+├─ src/
+│  ├─ index.ts            # server bootstrap
+│  ├─ app.ts              # express app
+│  ├─ routes/
+│  ├─ controllers/
+│  ├─ models/             # mongoose schemas
+│  ├─ middlewares/
+│  ├─ services/           # cloudinary, mailer, jobs etc.
+│  └─ utils/
+└─ Dockerfile
+```
+
+---
+
+# 4) Environment variables (প্রধান)
+
+`.env` (server)
+
+```
+PORT=4000
+MONGO_URI=your_mongo_atlas_uri
+JWT_ACCESS_SECRET=xxxx
+JWT_REFRESH_SECRET=yyyy
+CLOUDINARY_URL=cloudinary://...
+EMAIL_SMTP_HOST=smtp.example.com
+EMAIL_USER=...
+EMAIL_PASS=...
+FRONTEND_URL=https://your-frontend.vercel.app
+```
+
+`.env.local` (client)
+
+```
+NEXT_PUBLIC_API_URL=https://api.yoursite.com
+NEXT_PUBLIC_CLOUDINARY_NAME=...
+```
+
+---
+
+# 5) Database Schema (Mongoose — প্রাথমিক)
+
+**User**
+
+```ts
+// models/User.ts (Mongoose)
+import { Schema, model } from 'mongoose';
+
+const UserSchema = new Schema({
+  name: String,
+  email: { type: String, required: true, unique: true },
+  password: { type: String }, // hashed
+  role: { type: String, enum: ['reader','author','admin'], default: 'reader' },
+  avatarUrl: String,
+  isVerified: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now },
+});
+
+export default model('User', UserSchema);
+```
+
+**Post**
+
+```ts
+// models/Post.ts
+import { Schema, model } from 'mongoose';
+
+const PostSchema = new Schema({
+  title: { type: String, required: true },
+  slug: { type: String, required: true, unique: true },
+  excerpt: String,
+  content: String, // HTML or markdown
+  author: { type: Schema.Types.ObjectId, ref: 'User' },
+  tags: [String],
+  categories: [String],
+  coverImage: String,
+  status: { type: String, enum: ['draft','published','scheduled'], default: 'draft' },
+  publishedAt: Date,
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: Date,
+});
+export default model('Post', PostSchema);
+```
+
+**Comment**
+
+```ts
+// models/Comment.ts
+const CommentSchema = new Schema({
+  post: { type: Schema.Types.ObjectId, ref: 'Post' },
+  authorName: String,
+  authorEmail: String,
+  content: String,
+  approved: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now },
+});
+```
+
+---
+
+# 6) Backend — API endpoints (REST)
+
+**Auth**
+
+* `POST /api/auth/register` — create user, send verification mail
+* `POST /api/auth/login` — validate, set httpOnly access token cookie + refresh token cookie
+* `POST /api/auth/refresh` — issue new access token
+* `POST /api/auth/logout` — clear tokens
+* `GET /api/auth/me` — get user profile (protected)
+
+**Posts**
+
+* `GET /api/posts` — list (filters: tag, search, page, limit, sort)
+* `GET /api/posts/:slug` — get single
+* `POST /api/posts` — create (protected: author/admin)
+* `PUT /api/posts/:id` — update
+* `DELETE /api/posts/:id` — delete
+* `POST /api/posts/:id/publish` — publish / schedule
+
+**Media**
+
+* `POST /api/uploads` — image upload (multer -> cloudinary)
+
+**Comments**
+
+* `POST /api/posts/:id/comments` — add comment (optional moderation)
+* `GET /api/posts/:id/comments`
+
+**Admin**
+
+* `GET /api/admin/stats` — basic counts, traffic
+
+**Utilities**
+
+* `GET /api/sitemap.xml` (or generate on frontend)
+* `POST /api/contact` — contact form handler
+
+---
+
+# 7) Auth flow (recommended)
+
+* Passwords hashed with **bcrypt** (`bcrypt.hash` + saltRounds).
+* On login:
+
+  * Issue **access token** (short lived, e.g., 15m) as httpOnly Secure cookie.
+  * Issue **refresh token** (long lived) stored in DB (or Redis) to validate and rotate.
+* Protect API with `authMiddleware` that verifies access token.
+* Use refresh endpoint to rotate tokens.
+* For CSRF, if using cookies, implement double-submit cookie or use SameSite=strict & CSRF token.
+
+---
+
+# 8) Frontend — important parts & patterns
+
+* Use **App Router** (`src/app/`) with `layout.tsx` and `page.tsx`.
+* Use **server components** for SEO-sensitive parts (post content rendering) and client components for interactivity (comments, like buttons).
+* Data fetching: use `fetch` from client with `react-query`/SWR for caching and mutations.
+* API client wrapper (`src/lib/api.ts`) that attaches cookies/handles refresh automatically.
+* Rich editor component for admin (TipTap + image upload).
+* Protected admin area: client checks `GET /api/auth/me` and renders admin UI if user.role is author/admin.
+* Use `next/image` for images and optimized loading.
+* Add `sitemap.xml` and dynamic OG images (optional: generate on the fly).
+
+Sample client API fetcher with React Query:
+
+```ts
+// client/src/lib/api.ts
+export const api = async (path: string, options: RequestInit = {}) => {
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}${path}`, {
+    credentials: 'include',
+    ...options,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+};
+```
+
+---
+
+# 9) File upload flow (images)
+
+* Frontend uploads image to backend -> backend streams to **Cloudinary** (or S3) and returns URL.
+* For temporary direct upload, you can generate signed upload URLs on server and upload from client.
+
+Backend snippet (multer + cloudinary):
+
+```ts
+// services/upload.ts (pseudo)
+import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary';
+// configure cloudinary from env
+// use multer memory storage, then cloudinary.uploader.upload_stream
+```
+
+---
+
+# 10) Validation & Security (musts)
+
+* Input validation: **zod** or **Joi** on backend and typesafe zod on frontend.
+* Rate limiting: `express-rate-limit` for auth & public endpoints.
+* Helmet for security headers.
+* CORS: restrict allowed origins.
+* Sanitize HTML (if storing HTML) using `sanitize-html` to prevent XSS; or store Markdown and render safely.
+* File upload type/size checks.
+* Use HTTPS everywhere and secure cookies (SameSite, secure, httpOnly).
+* Avoid sending secrets to client; only use `NEXT_PUBLIC_` prefix for safe envs.
+
+---
+
+# 11) Testing
+
+* Backend: **Jest + Supertest** for endpoint tests. Write tests for auth flows, posts CRUD, image upload.
+* Frontend: **Vitest + React Testing Library** for components; write tests for Top Nav, PostCard, editor components.
+* E2E: **Playwright** for core user journeys: register, login, create post, publish, view post.
+
+---
+
+# 12) CI/CD & DevOps (recommended)
+
+* **GitHub Actions** workflows:
+
+  * `ci-backend.yml`: install, lint, test, build Docker image (optional).
+  * `ci-frontend.yml`: install, lint, test, build, deploy to Vercel (or build artifact).
+* Deploy stack:
+
+  * Frontend -> **Vercel** (optimal for Next.js)
+  * Backend -> **Render / Railway / DigitalOcean App Platform** or deploy container to AWS ECS / GCP Cloud Run
+  * DB -> **MongoDB Atlas**
+  * Storage -> **Cloudinary / S3**
+* Use `docker-compose` locally: services: mongo, backend, frontend (next dev).
+
+Sample GitHub Action job (simplified):
+
+```yaml
+name: CI
+on: [push]
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: pnpm/action-setup@v2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+```
+
+---
+
+# 13) Observability & Monitoring
+
+* Logging: **pino** or **winston** for structured logs.
+* Error tracking: **Sentry** (backend + frontend).
+* Basic health check endpoint: `/api/health`.
+* Metrics: integrate basic request counts, DB latency logs.
+
+---
+
+# 14) Production checklist (before deploy)
+
+* Env variables set in host (no secrets in repo)
+* DB backups enabled (Mongo Atlas)
+* HTTPS / SSL configured
+* Rate limits in place & brute force protections
+* Content sanitization & XSS protection
+* CORS origin whitelist
+* Error reporting (Sentry) enabled
+* CI runs tests and lints prior to deploy
+* Static assets cached, images optimized
+* robots.txt + sitemap.xml present
+* Basic SEO (meta tags, OG tags) implemented
+* Accessibility audit (Lighthouse) >= 90 for key pages
+
+---
+
+# 15) Docs & README (must-have in repo)
+
+README should include:
+
+* Project summary & features (short)
+* Tech stack & architecture diagram (ASCII/image)
+* Quickstart (how to run locally with envs)
+* How to run tests
+* Deployment notes
+* API docs link (Swagger/OpenAPI) or Postman collection
+* How to contribute / coding conventions
+
+Also create **API Postman collection** or **OpenAPI spec** for interview demo.
+
+---
+
+# 16) Resume / Interview help — কী লিখবে (বাংলা + ইংরিজি উদাহরণ)
+
+**Project bullet points (resume-ready):**
+
+* Developed a production-ready **Next.js (TypeScript) blog platform** with server-side rendering, SEO, and image optimization.
+* Built REST API using **Node.js + Express + MongoDB (Mongoose)** supporting posts, auth, image uploads and role-based access control.
+* Implemented secure authentication using **HTTP-Only JWT cookies** with refresh tokens; protected endpoints with middleware.
+* Integrated **Cloudinary** for image storage and optimized image delivery via `next/image`.
+* Added CI/CD with **GitHub Actions** and deployed frontend on **Vercel** and backend on **Render**.
+* Wrote unit & integration tests using **Jest & Supertest** and E2E tests with **Playwright**.
+
+**বাংলায় (সারসংক্ষেপ — CV-এর জন্য)**
+
+* Next.js + TypeScript দিয়ে SEO-ready ব্লগ প্ল্যাটফর্ম তৈরি (SSR/ISR ব্যবহৃত)।
+* Node.js + Express + MongoDB দিয়ে REST API, JWT cookie-based auth, role-based access control।
+* Cloudinary ইন্টিগ্রেশন, GitHub Actions CI, Vercel/Render ডেপ্লয়মেন্ট, unit & e2e টেস্টিং।
+
+**Interview talking points (বলতে হলে)**
+
+* কেন MongoDB? (flexible schema, quick iteration) — tradeoffs vs SQL
+* JWT cookie vs token in localStorage — security reasoning
+* SSR vs SSG vs ISR নির্বাচন কিভাবে করেছিলে
+* কিভাবে large post content sanitize & render করেছো
+* caching strategy (CDN for assets, stale-while-revalidate)
+* scaling considerations (DB indexes, pagination, query optimization)
+
+---
+
+# 17) কাছ থেকে শুরু করার ধাপ — Step-by-Step (copy-paste করে কাজ করো)
+
+### Step 0 — init repo
+
+```bash
+mkdir blog-project && cd blog-project
+git init
+# client
+npx create-next-app@latest client --typescript --app
+# server
+mkdir server && cd server
+npm init -y
+npm i express mongoose dotenv bcrypt jsonwebtoken cors helmet morgan express-rate-limit multer nodemailer zod
+npm i -D typescript ts-node-dev @types/express @types/node @types/mongoose jest ts-jest @types/jest supertest @types/supertest
+```
+
+### Step 1 — basic backend bootstrap
+
+* tsconfig, nodemon/ts-node-dev script
+* connect to MongoDB
+* user model + auth routes (register/login)
+* test the endpoints with Postman / Insomnia
+
+### Step 2 — posts model & CRUD
+
+* implement posts model + slugify titles
+* implement create/edit/delete endpoints (auth middleware)
+* pagination & filters on `GET /api/posts`
+
+### Step 3 — image upload
+
+* setup Cloudinary, implement `/api/uploads` endpoint, integrate with posts.
+
+### Step 4 — frontend scaffold
+
+* create basic layout, navbar, footer
+* implement blog list (server-side fetch or client fetch), single post page
+* render post HTML/markdown safely
+
+### Step 5 — admin/editor
+
+* add protected admin area and rich editor (TipTap)
+* implement create post UI, image upload from editor
+
+### Step 6 — features: search, tags, comments
+
+* implement server-side search, tag pages, comments with moderation
+
+### Step 7 — SEO & sitemap
+
+* add metadata per page, OG tags, dynamic sitemap.xml
+
+### Step 8 — tests & CI
+
+* write tests for auth & posts
+* configure GitHub Actions to run tests & lint
+
+### Step 9 — dockerize & deploy
+
+* create Dockerfile for server & docker-compose for local dev
+* deploy DB on Atlas, backend on Render, frontend on Vercel
+* configure env vars on hosts
+
+### Step 10 — monitoring & polish
+
+* Sentry, analytics, Lighthouse accessibility fixes
+
+---
+
+# 18) Useful small code examples (quick references)
+
+**Slug helper**
+
+```ts
+export const slugify = (text: string) =>
+  text.toString().toLowerCase()
+    .replace(/\s+/g, '-')      // space to -
+    .replace(/[^\w\-]+/g, '')  // remove non-word
+    .replace(/\-\-+/g, '-')    // collapse dashes
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+```
+
+**Auth middleware (Express)**
+
+```ts
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+export const authMiddleware = (req: Request, res:Response, next:NextFunction) => {
+  const token = req.cookies?.accessToken;
+  if (!token) return res.status(401).send({ message: 'Unauthorized' });
+  try {
+    const payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET as string);
+    req.user = payload;
+    next();
+  } catch (err) {
+    return res.status(401).send({ message: 'Invalid token' });
+  }
+};
+```
+
+---
+
+# 19) Common pitfalls & mitigation
+
+* **Storing raw HTML** → sanitize before render.
+* **No rate limit on auth** → add rate limiter.
+* **Large images** → implement server resize / use Cloudinary transformations.
+* **Exposing secrets** → .env in repo — never. Use secret manager.
+* **Not writing tests** → write basic auth + posts tests to avoid regressions.
+
+---
+
+# 20) শেষ কথা — কি চাইলে আমি পরের রিপ্লাই-এ দেব
+
+আমি চাইলে এখনই (এক্সিকিউটেবল) ছোট-খাটো টেমপ্লেট/স্টার্টার দিতে পারি:
+
+* A) **Backend starter** (Express+TS + auth endpoints + Mongoose models + dockerfile + .env.example) — কপি-পেস্ট করে চলবে।
+* B) **Frontend starter** (Next.js App Router + auth client + posts list + single post page + react-query setup).
+* C) বা উভয়টা একসাথে (monorepo) — আমি তোমার পছন্দমত scaffold কোড তৈরি করে দেব।
+
+তুমি কোনটি আগে চাইবে? আমি তোমার জন্য পরের মেসেজে পুরো **backend starter** বা **frontend starter** কোডসহ সেটআপ লিখে দিব।
+
+চল— বলো, **A (backend)** নাকি **B (frontend)** শুরু করব এখনই?

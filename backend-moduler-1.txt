@@ -1,0 +1,541 @@
+চমৎকার — নিচে তোমার জন্য **modular (service/controller/model) pattern** অনুযায়ী সম্পূর্ণ, প্রফেশনাল এবং **No-Docker** ব্যাকএন্ড স্টার্টার (Express + TypeScript + Mongoose) — ধাপে ধাপে রান/টেস্ট/ডেপ্লয় করার ইনস্ট্রাকশনসহ — পুরোটা বাংলা ভাষায় দিলাম। আমি auth মডিউল (auth.model / auth.service / auth.controller / auth.route) পুরো কোডসহ দিয়েছি, বাকি মডিউলগুলোর জন্য স্ট্রাকচার ও উদাহরণও আছে। শেষে আমি **কোথায় এবং কিভাবে ফ্রি-তে ডেপ্লয়** করা যায় সেটা বলেছি (সংশ্লিষ্ট সূত্রও সাইট থেকে চেক করে দিয়েছি)।
+
+> সংক্ষেপে — কি পাচ্ছো:
+>
+> 1. স্পষ্ট ফোল্ডার স্ট্রাকচার (module-wise)
+> 2. পূর্ণ auth মডিউল কোড (TypeScript + Mongoose + JWT cookie auth + refresh token)
+> 3. সাধারণ পোস্ট মডিউল scaffold (কীভাবে বাড়াবে)
+> 4. লোকালি রান করার ধাপ (no docker)
+> 5. Postman দিয়ে কিভাবে চেক/কাগজপত্র তৈরী করবে (collection & docs)
+> 6. ফ্রি ডেপ্লয় অপশন ও স্টেপ (Render + MongoDB Atlas প্রস্তাব) — সূত্রসহ। ([Render][1])
+
+---
+
+# ১) প্রস্তাবিত ফোল্ডার স্ট্রাকচার (modular pattern)
+
+```
+server/
+├─ package.json
+├─ tsconfig.json
+├─ .env.example
+├─ README.md
+└─ src/
+   ├─ index.ts                # entry (connect DB + start server)
+   ├─ app.ts                  # express app + global middlewares
+   ├─ config/
+   │   └─ db.ts
+   ├─ types/
+   │   └─ express.d.ts        # request.user টাইপ augment
+   ├─ modules/
+   │   ├─ auth/
+   │   │  ├─ auth.model.ts
+   │   │  ├─ auth.service.ts
+   │   │  ├─ auth.controller.ts
+   │   │  └─ auth.routes.ts
+   │   ├─ posts/
+   │   │  ├─ post.model.ts
+   │   │  ├─ post.service.ts
+   │   │  ├─ post.controller.ts
+   │   │  └─ post.routes.ts
+   │   └─ ...                 # future modules: uploads, comments, admin
+   ├─ middlewares/
+   │   ├─ auth.middleware.ts
+   │   └─ error.middleware.ts
+   └─ utils/
+      ├─ jwt.ts
+      └─ slugify.ts
+```
+
+---
+
+# ২) প্রয়োজনীয় প্যাকেজ (install commands)
+
+```bash
+# project root e giye
+npm init -y
+
+# core deps
+npm install express mongoose dotenv cookie-parser cors helmet bcrypt jsonwebtoken express-rate-limit
+
+# types + dev tools
+npm install -D typescript ts-node-dev @types/express @types/node @types/cookie-parser @types/cors @types/jsonwebtoken @types/mongoose
+
+# (optional, strongly recommended)
+npm install zod
+npm install -D @types/bcrypt
+```
+
+`package.json` scripts (recommended):
+
+```json
+"scripts": {
+  "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+  "build": "tsc -p .",
+  "start": "node dist/index.js"
+}
+```
+
+`tsconfig.json` (সহজ):
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+`.env.example`
+
+```
+PORT=4000
+MONGO_URI=your_mongodb_atlas_connection_string
+JWT_ACCESS_SECRET=change_this_access_secret
+JWT_REFRESH_SECRET=change_this_refresh_secret
+FRONTEND_URL=http://localhost:3000
+NODE_ENV=development
+```
+
+---
+
+# ৩) সাধারণ কনফিগ (DB + app entry)
+
+`src/config/db.ts`
+
+```ts
+import mongoose from 'mongoose';
+
+const connectDB = async () => {
+  const uri = process.env.MONGO_URI || 'mongodb://localhost:27017/blogdb';
+  await mongoose.connect(uri);
+  console.log('MongoDB connected');
+};
+
+export default connectDB;
+```
+
+`src/index.ts`
+
+```ts
+import dotenv from 'dotenv';
+dotenv.config();
+import app from './app';
+import connectDB from './config/db';
+
+const PORT = process.env.PORT || 4000;
+
+(async () => {
+  try {
+    await connectDB();
+    app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+  } catch (err) {
+    console.error('Startup error', err);
+    process.exit(1);
+  }
+})();
+```
+
+`src/app.ts`
+
+```ts
+import express from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import rateLimit from 'express-rate-limit';
+import authRoutes from './modules/auth/auth.routes';
+import postRoutes from './modules/posts/post.routes';
+import errorHandler from './middlewares/error.middleware';
+
+const app = express();
+
+app.use(helmet());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
+
+app.use(rateLimit({ windowMs: 15*60*1000, max: 200 }));
+
+app.get('/', (_req, res) => res.json({ ok: true }));
+
+app.use('/api/auth', authRoutes);
+app.use('/api/posts', postRoutes);
+
+app.use(errorHandler);
+
+export default app;
+```
+
+---
+
+# ৪) Express Request augment (types) — TypeScript-friendly
+
+`src/types/express.d.ts`
+
+```ts
+import { JwtPayload } from 'jsonwebtoken';
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: { id: string, role?: string } | JwtPayload;
+    }
+  }
+}
+```
+
+(ensure `tsconfig` includes `src` so compiler picks it up)
+
+---
+
+# ৫) পুরো **Auth module** (মডিউলার কোড — কপি/পেস্ট চালাবে)
+
+`src/modules/auth/auth.model.ts`
+
+```ts
+import { Schema, model, Document } from 'mongoose';
+
+export interface IUser extends Document {
+  name?: string;
+  email: string;
+  password?: string;
+  role: 'reader' | 'author' | 'admin';
+  refreshToken?: string | null; // store single refresh token (simple)
+}
+
+const UserSchema = new Schema<IUser>({
+  name: String,
+  email: { type: String, required: true, unique: true },
+  password: String,
+  role: { type: String, enum: ['reader','author','admin'], default: 'reader' },
+  refreshToken: { type: String, default: null }
+}, { timestamps: true });
+
+export default model<IUser>('User', UserSchema);
+```
+
+`src/utils/jwt.ts`
+
+```ts
+import jwt from 'jsonwebtoken';
+
+export const createAccessToken = (payload: object) => {
+  return jwt.sign(payload, process.env.JWT_ACCESS_SECRET as string, { expiresIn: '15m' });
+};
+
+export const createRefreshToken = (payload: object) => {
+  return jwt.sign(payload, process.env.JWT_REFRESH_SECRET as string, { expiresIn: '7d' });
+};
+
+export const verifyAccessToken = (token: string) => {
+  return jwt.verify(token, process.env.JWT_ACCESS_SECRET as string);
+};
+
+export const verifyRefreshToken = (token: string) => {
+  return jwt.verify(token, process.env.JWT_REFRESH_SECRET as string);
+};
+```
+
+`src/modules/auth/auth.service.ts`
+
+```ts
+import User, { IUser } from './auth.model';
+import bcrypt from 'bcrypt';
+import { createAccessToken, createRefreshToken, verifyRefreshToken } from '../../utils/jwt';
+
+export const registerUser = async (name: string | undefined, email: string, password: string) => {
+  const existing = await User.findOne({ email });
+  if (existing) throw new Error('Email already in use');
+
+  const hashed = await bcrypt.hash(password, 10);
+  const user = await User.create({ name, email, password: hashed, role: 'author' });
+  return { id: user._id, email: user.email, role: user.role };
+};
+
+export const loginUser = async (email: string, password: string) => {
+  const user = await User.findOne({ email });
+  if (!user || !user.password) throw new Error('Invalid credentials');
+
+  const ok = await bcrypt.compare(password, user.password);
+  if (!ok) throw new Error('Invalid credentials');
+
+  const accessToken = createAccessToken({ id: user._id, role: user.role });
+  const refreshToken = createRefreshToken({ id: user._id });
+
+  // Save refresh token (simple rotation strategy)
+  user.refreshToken = refreshToken;
+  await user.save();
+
+  return { accessToken, refreshToken, user: { id: user._id, email: user.email, role: user.role } };
+};
+
+export const refreshTokens = async (token: string) => {
+  try {
+    const payload: any = verifyRefreshToken(token);
+    const user = await User.findById(payload.id);
+    if (!user || user.refreshToken !== token) throw new Error('Invalid refresh token');
+
+    const newAccess = createAccessToken({ id: user._id, role: user.role });
+    const newRefresh = createRefreshToken({ id: user._id });
+
+    user.refreshToken = newRefresh;
+    await user.save();
+
+    return { accessToken: newAccess, refreshToken: newRefresh };
+  } catch (err) {
+    throw new Error('Invalid refresh token');
+  }
+};
+```
+
+`src/modules/auth/auth.controller.ts`
+
+```ts
+import { Request, Response } from 'express';
+import * as authService from './auth.service';
+
+export const register = async (req: Request, res: Response) => {
+  try {
+    const { name, email, password } = req.body;
+    const user = await authService.registerUser(name, email, password);
+    res.status(201).json({ message: 'User created', user });
+  } catch (err: any) {
+    res.status(400).json({ message: err.message || 'Register error' });
+  }
+};
+
+export const login = async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
+    const { accessToken, refreshToken, user } = await authService.loginUser(email, password);
+
+    // set cookies (httpOnly)
+    res.cookie('accessToken', accessToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 15 * 60 * 1000
+    });
+    res.cookie('refreshToken', refreshToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+
+    res.json({ message: 'Logged in', user });
+  } catch (err: any) {
+    res.status(401).json({ message: err.message || 'Login failed' });
+  }
+};
+
+export const refresh = async (req: Request, res: Response) => {
+  try {
+    const token = req.cookies?.refreshToken || req.body.refreshToken;
+    if (!token) return res.status(401).json({ message: 'No refresh token' });
+
+    const { accessToken, refreshToken } = await authService.refreshTokens(token);
+
+    res.cookie('accessToken', accessToken, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+    res.cookie('refreshToken', refreshToken, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+
+    res.json({ message: 'Token refreshed' });
+  } catch (err: any) {
+    res.status(401).json({ message: err.message || 'Refresh failed' });
+  }
+};
+
+export const logout = async (_req: Request, res: Response) => {
+  // note: to be robust, clear refreshToken from DB (you can implement this)
+  res.clearCookie('accessToken');
+  res.clearCookie('refreshToken');
+  res.json({ message: 'Logged out' });
+};
+
+export const me = async (req: Request, res: Response) => {
+  if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+  res.json({ user: req.user });
+};
+```
+
+`src/modules/auth/auth.routes.ts`
+
+```ts
+import { Router } from 'express';
+import * as authCtrl from './auth.controller';
+import authMiddleware from '../../middlewares/auth.middleware';
+
+const router = Router();
+
+router.post('/register', authCtrl.register);
+router.post('/login', authCtrl.login);
+router.post('/refresh', authCtrl.refresh);
+router.post('/logout', authCtrl.logout);
+router.get('/me', authMiddleware, authCtrl.me);
+
+export default router;
+```
+
+`src/middlewares/auth.middleware.ts`
+
+```ts
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+export default (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const token = req.cookies?.accessToken;
+    if (!token) return res.status(401).json({ message: 'Unauthorized' });
+
+    const payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET as string) as any;
+    req.user = { id: payload.id, role: payload.role };
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+};
+```
+
+> **Tip:** আমি এই স্ট্র্যাটেজি-তে single refresh token user document-এ রাখেছি — সহজ, বোঝা সহজ এবং job/portfolio জন্য প্রচুর। Production-এ চাইলে Redis-backed refresh token store বা token versioning যোগ করবে।
+
+---
+
+# ৬) Posts module (সামান্য scaffold — পরে বাড়াবা)
+
+`src/modules/posts/post.model.ts` (শুধু schema)
+
+```ts
+import { Schema, model } from 'mongoose';
+
+const PostSchema = new Schema({
+  title: { type: String, required: true },
+  slug: { type: String, required: true, unique: true },
+  excerpt: String,
+  content: String,
+  author: { type: Schema.Types.ObjectId, ref: 'User' },
+  tags: [String],
+  coverImage: String,
+  status: { type: String, enum: ['draft', 'published'], default: 'draft' }
+}, { timestamps: true });
+
+export default model('Post', PostSchema);
+```
+
+`post.service/controller/routes` — একই pattern অনুসরণ করো (logic sepration in service, http logic in controller, express router file)
+
+---
+
+# ৭) লোকালি রান (No Docker) — স্টেপ-বাই-স্টেপ
+
+1. `.env` কপি করো `.env.example` থেকে ও পূরণ করো (MongoDB Atlas connection string সঠিক রাখো)।
+2. `npm install` চালাও।
+3. `npm run dev` চালাও।
+4. ব্রাউজে খুলে দেখো: `http://localhost:4000/` → `{ok:true}`।
+5. Postman/Insomnia দিয়ে API টেস্ট করো (নিচে Postman নির্দেশ আছে)।
+
+---
+
+# ৮) Postman দিয়ে চেক করা — কীভাবে (ধাপে ধাপে)
+
+1. **Environment** তৈরি করো (Name: local) এবং ভেরিয়াবল যোগ করো:
+
+   * `baseUrl` = `http://localhost:4000`
+2. **Collection** তৈরি করো: `Blog API`
+
+   * Request 1: `POST {{baseUrl}}/api/auth/register`
+
+     * Body JSON: `{ "name":"Test", "email":"test@example.com", "password":"password123" }`
+     * Test: expect status 201 → add script (optional):
+
+       ```js
+       pm.test("status 201", () => pm.response.to.have.status(201));
+       ```
+   * Request 2: `POST {{baseUrl}}/api/auth/login`
+
+     * Body JSON: `{ "email":"test@example.com", "password":"password123" }`
+     * After run, Postman automatically stores cookies for `localhost:4000`. (Use Postman Cookies UI to inspect).
+   * Request 3: `GET {{baseUrl}}/api/auth/me` (Protected)
+
+     * Make sure to send cookies (Postman does it automatically when same host).
+     * Expect 200 and user object.
+   * Request 4: `POST {{baseUrl}}/api/posts` (Protected)
+
+     * Body JSON: `{ "title":"Hello", "content":"...", "excerpt":"..." }`
+     * This will use same cookie jar set by login — if cookies missing, add header manually: `Cookie: accessToken=...; refreshToken=...` (copy from Cookies tab).
+3. **Export collection** (three dots → Export) — পেপারপ্রুফ ভাবে শেয়ার/attach করবে কোনো জব ইন্টারভিউতে।
+4. **Publish docs**: Postman-এ Collection → `Publish Docs` অপশন আছে (Postman account লাগবে)। এতে একটি public docs URL পাবো যা রিক্রুটার/ইন্টারভিউয়ারের সাথে শেয়ার করা যায়।
+
+---
+
+# ৯) ফ্রি-এ ডেপ্লয় করার সুপারিশ (সংক্ষিপ্ত)
+
+* **Backend (Node/Express)**: আমি **Render** প্রস্তাব করব — Render-এ free web services আছে (hobby/free instance) এবং এটি GitHub থেকে auto-deploy করে; TLS ও custom domain সমর্থন করে। বিস্তারিত Render ডকস দেখো। ([Render][1])
+* **Database**: **MongoDB Atlas** — free M0 cluster (Atlas offers free shared cluster) — সহজে তৈরি করে connection string নেবে। ([MongoDB][2])
+* **অল্টারনেটিভ**: Railway/ Fly.io প্রস্তাব আছে কিন্তু credit/limits পরিবর্তনসাপেক্ষ; Railway নতুন ইউজারদের free credits দেয়— দেখবে। ([Railway][3])
+* **Frontend**: Next.js app হলে Vercel সবচেয়ে সহজ; তবে Vercel serverless functions-এর কিছু সীমাবদ্ধতা আছে — যদি full-blown long-lived backend লাগবে তবে Render/ Railway ভালো। ([Northflank][4])
+
+---
+
+# ১০) Render-এ Deploy (Quick steps)
+
+1. GitHub এ কোড push করো (`main` branch)।
+2. Render এ account তৈরি করে “New Web Service” → connect GitHub repo।
+3. Build Command: `npm install && npm run build` (বা `npm ci && npm run build`), Start Command: `npm run start`।
+4. Environment: Add env vars (MONGO_URI, JWT_* etc).
+5. Deploy বাটনে ক্লিক — লগগুলো দেখতে পারবে।
+6. DNS / custom domain সেট করে TLS enable করো (Render free TLS)। (ওই পেজে নির্দেশ আছে)। ([Render][1])
+
+> নোট: Render free service limitations আছে — hobby/free instances কখনো sleep করতে পারে বা resource সীমাবদ্ধ থাকে; small projects / portfolios-এর জন্য ঠিক আছে। ([Render][1])
+
+---
+
+# ১১) প্রোডাকশনে নিরাপত্তা ও ভালো প্র্যাকটিস (তাড়াতাড়ি তালিকা)
+
+* **HTTPS** বাধ্যতামূলক (Render/TLS provide করে)।
+* Cookie flags: `httpOnly`, `secure` (prod), `SameSite=strict/lax`।
+* Refresh token revoke বা rotation (আমি sample-এ rotation রেখেছি)।
+* Input validation (zod) ও output sanitization।
+* Rate-limit, Helmet, CORS origin whitelist।
+* Logging (winston/pino) + error tracking (Sentry)।
+* DB indexes: user.email(unique), post.slug(unique) ইত্যাদি।
+
+---
+
+# ১২) Interview/Resume-ready presentation (কি লিখবে)
+
+* "Built Node.js + Express REST API with modular architecture (auth, posts), JWT-based httpOnly cookie authentication with refresh-token rotation and MongoDB Atlas persistence. Deployed backend to Render and connected to Next.js frontend on Vercel."
+* GitHub repo-তে **API.md** রাখো → সব endpoints + example requests + sample responses + Postman collection link/README badge রাখবে।
+
+---
+
+# ১৩) পরবর্তী আমি যা করে দিতে পারি (তুমার পছন্দে)
+
+* A) তোমার প্রোজেক্টে **refresh-token rotation + logout that clears DB token** পূর্ণভাবে ইমপ্লিমেন্ট করে দেব।
+* B) **Cloudinary image upload service** (multer stream → cloudinary) যোগ করে দেব, এবং frontend-এ ব্যবহার উদাহরণ দেব।
+* C) **Postman collection JSON** আমি তৈরি করে দেব যাতে তুমি সরাসরি import করে টেস্ট করতে পারো।
+* D) একই স্টাইল-এ **frontend starter (Next.js + auth client hooks + posts list)** দিয়ে দেব যাতে তুমি সম্পূর্ণ প্রোডাকশনে লাগাতে পারো।
+
+তুমি কোনটা আগে চাও? আমি এখনই (A/B/C/D) থেকে একটা করে সম্পূর্ণ কপি-পেস্টযোগ্য কোড ব্লক পাঠিয়ে দিব।
+
+শেষে দুটো গুরুত্বপূর্ন সূত্র (read before deploy): Render free web services এবং MongoDB Atlas free cluster docs। ([Render][1])
+
+---
+
+চল, বলো কোনটা আগে পছন্দ — **Postman collection (C)** বানিয়ে দিই? না কি **Cloudinary upload (B)** যোগ করি? অথবা আমি **refresh-token hardening (A)** করে দিই — তুমি নির্ধারণ করো, আমি কোডসহ একে-একা করে করে দেব। 🚀
+
+[1]: https://render.com/docs/free?utm_source=chatgpt.com "Deploy for Free – Render Docs"
+[2]: https://www.mongodb.com/docs/atlas/tutorial/deploy-free-tier-cluster/?utm_source=chatgpt.com "Deploy a Free Cluster - Atlas - MongoDB Docs"
+[3]: https://railway.com/pricing?utm_source=chatgpt.com "Railway Pricing and Plans"
+[4]: https://northflank.com/blog/vercel-backend-limitations?utm_source=chatgpt.com "Can you use Vercel for backend? What works and when to ..."
