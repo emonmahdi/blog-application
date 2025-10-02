@@ -1,0 +1,321 @@
+দারুণ 👏 — তুমি যেভাবে **modular structure** (service / controller / model / routes) দিয়ে **Auth Module** বানিয়েছো, সেই একই ধাঁচে এখন আমরা **Post Module** তৈরি করবো।
+
+নীচে আমি ধাপে ধাপে দিচ্ছি:
+
+1. **Folder structure** আগের মতোই
+2. `post.model.ts` – Mongoose schema/model
+3. `post.service.ts` – ডাটাবেজ CRUD লজিক
+4. `post.controller.ts` – API লজিক (req/res)
+5. `post.routes.ts` – সব রাউট
+6. **Postman Test** উদাহরণ (request bodies, sample response)
+7. শেষে **চালানোর গাইড**
+
+---
+
+## 🗂 1. Folder Structure (modules/posts)
+
+```
+src/
+ └─ modules/
+     └─ posts/
+         ├─ post.model.ts
+         ├─ post.service.ts
+         ├─ post.controller.ts
+         └─ post.routes.ts
+```
+
+---
+
+## 📝 2. post.model.ts
+
+```ts
+import mongoose, { Schema, Document } from "mongoose";
+
+export interface IPost extends Document {
+  title: string;
+  content: string;
+  author: mongoose.Types.ObjectId;
+  slug: string;
+  tags?: string[];
+  published: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const PostSchema = new Schema<IPost>(
+  {
+    title: { type: String, required: true, trim: true },
+    content: { type: String, required: true },
+    author: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    slug: { type: String, required: true, unique: true },
+    tags: [{ type: String }],
+    published: { type: Boolean, default: false }
+  },
+  { timestamps: true }
+);
+
+export const PostModel = mongoose.model<IPost>("Post", PostSchema);
+```
+
+---
+
+## ⚙️ 3. post.service.ts
+
+```ts
+import { PostModel, IPost } from "./post.model";
+import { Types } from "mongoose";
+import slugify from "../../utils/slugify";
+
+export const createPost = async (
+  title: string,
+  content: string,
+  authorId: Types.ObjectId,
+  tags?: string[]
+): Promise<IPost> => {
+  const slug = slugify(title);
+  const newPost = await PostModel.create({
+    title,
+    content,
+    author: authorId,
+    slug,
+    tags,
+    published: false
+  });
+  return newPost;
+};
+
+export const getAllPosts = async (): Promise<IPost[]> => {
+  return PostModel.find({}).populate("author", "name email");
+};
+
+export const getPostBySlug = async (slug: string): Promise<IPost | null> => {
+  return PostModel.findOne({ slug }).populate("author", "name email");
+};
+
+export const updatePost = async (
+  slug: string,
+  data: Partial<IPost>
+): Promise<IPost | null> => {
+  if (data.title) data.slug = slugify(data.title);
+  return PostModel.findOneAndUpdate({ slug }, data, { new: true });
+};
+
+export const deletePost = async (slug: string): Promise<IPost | null> => {
+  return PostModel.findOneAndDelete({ slug });
+};
+```
+
+---
+
+## 🎛 4. post.controller.ts
+
+```ts
+import { Request, Response, NextFunction } from "express";
+import * as postService from "./post.service";
+
+export const createPostHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { title, content, tags } = req.body;
+    const authorId = req.user?._id; // auth middleware থেকে আসবে
+    if (!authorId) return res.status(401).json({ message: "Unauthorized" });
+
+    const post = await postService.createPost(title, content, authorId, tags);
+    res.status(201).json({ message: "Post created", data: post });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getAllPostsHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const posts = await postService.getAllPosts();
+    res.json({ data: posts });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getPostBySlugHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const post = await postService.getPostBySlug(req.params.slug);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    res.json({ data: post });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updatePostHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const post = await postService.updatePost(req.params.slug, req.body);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    res.json({ message: "Post updated", data: post });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deletePostHandler = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const post = await postService.deletePost(req.params.slug);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    res.json({ message: "Post deleted" });
+  } catch (error) {
+    next(error);
+  }
+};
+```
+
+---
+
+## 🚏 5. post.routes.ts
+
+```ts
+import { Router } from "express";
+import {
+  createPostHandler,
+  getAllPostsHandler,
+  getPostBySlugHandler,
+  updatePostHandler,
+  deletePostHandler
+} from "./post.controller";
+import { authMiddleware } from "../../middlewares/auth.middleware";
+
+const router = Router();
+
+router.get("/", getAllPostsHandler);
+router.get("/:slug", getPostBySlugHandler);
+
+router.post("/", authMiddleware, createPostHandler);
+router.put("/:slug", authMiddleware, updatePostHandler);
+router.delete("/:slug", authMiddleware, deletePostHandler);
+
+export default router;
+```
+
+> তারপর **`app.ts`** বা **`index.ts`** এ যোগ করো:
+
+```ts
+import postRoutes from "./modules/posts/post.routes";
+app.use("/api/posts", postRoutes);
+```
+
+---
+
+## 🧪 6. Postman টেস্ট (উদাহরণ)
+
+**Base URL:** `http://localhost:5000/api/posts`
+
+### 🔑 1) Create Post (POST /api/posts)
+
+* Headers: `Cookie: accessToken=<your_token>`
+* Body (JSON):
+
+```json
+{
+  "title": "First Blog Post",
+  "content": "This is the content of the first post",
+  "tags": ["react", "backend"]
+}
+```
+
+* Response (201):
+
+```json
+{
+  "message": "Post created",
+  "data": {
+    "_id": "651a8f...",
+    "title": "First Blog Post",
+    "slug": "first-blog-post",
+    "content": "This is the content of the first post",
+    "author": "650d6c...",
+    "tags": ["react","backend"],
+    "published": false,
+    "createdAt": "...",
+    "updatedAt": "..."
+  }
+}
+```
+
+### 📜 2) Get All Posts (GET /api/posts)
+
+Response:
+
+```json
+{
+  "data": [
+    {
+      "title": "First Blog Post",
+      "slug": "first-blog-post",
+      "author": { "_id": "...", "name": "Emon" },
+      ...
+    }
+  ]
+}
+```
+
+### 🔍 3) Get Single Post (GET /api/posts/:slug)
+
+```http
+GET /api/posts/first-blog-post
+```
+
+### ✏️ 4) Update Post (PUT /api/posts/:slug)
+
+```json
+{
+  "title": "Updated Blog Post",
+  "published": true
+}
+```
+
+### ❌ 5) Delete Post (DELETE /api/posts/:slug)
+
+---
+
+## ▶️ 7. লোকালি রান করা
+
+```bash
+# dependencies ইনস্টল
+npm install
+npm run build
+npm run dev   # nodemon + ts-node হলে
+```
+
+1. **MongoDB Atlas** connection string `.env`-এ বসাও
+
+   ```
+   MONGO_URI=your_mongo_atlas_url
+   JWT_SECRET=your_jwt_secret
+   PORT=5000
+   ```
+2. **Auth routes** দিয়ে আগে `register` ও `login` টেস্ট করো
+3. লগইনের পর **Set-Cookie** থেকে `accessToken` নিয়ে পোস্ট API তে পাঠাও
+
+---
+
+✅ এভাবে তুমি Post Module বানিয়ে ফেললে এবং Postman দিয়ে টেস্ট করতে পারবে।
+⚡️ পরবর্তী সময়ে তুমি এই মডিউলে **pagination, image upload, search/filter** যুক্ত করতে পারো।
+
+তুমি কি চাও আমি Postman collection `.json` ফাইলও তৈরি করে দেই যাতে ইমপোর্ট করলেই টেস্ট করা যায়?
