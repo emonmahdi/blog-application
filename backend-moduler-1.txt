@@ -539,3 +539,25 @@ export default model('Post', PostSchema);
 [2]: https://www.mongodb.com/docs/atlas/tutorial/deploy-free-tier-cluster/?utm_source=chatgpt.com "Deploy a Free Cluster - Atlas - MongoDB Docs"
 [3]: https://railway.com/pricing?utm_source=chatgpt.com "Railway Pricing and Plans"
 [4]: https://northflank.com/blog/vercel-backend-limitations?utm_source=chatgpt.com "Can you use Vercel for backend? What works and when to ..."
+
+
+
+src/modules/posts/post.model.ts (শুধু schema)
+
+import { Schema, model } from 'mongoose';
+
+const PostSchema = new Schema({
+  title: { type: String, required: true },
+  slug: { type: String, required: true, unique: true },
+  excerpt: String,
+  content: String,
+  author: { type: Schema.Types.ObjectId, ref: 'User' },
+  tags: [String],
+  coverImage: String,
+  status: { type: String, enum: ['draft', 'published'], default: 'draft' }
+}, { timestamps: true });
+
+export default model('Post', PostSchema);
+
+
+post.service/controller/routes — একই pattern অনুসরণ করো (logic sepration in service, http logic in controller, express router file)
