@@ -1,5 +1,11 @@
 // import React from "react";
 
+import BlogCard from "@/components/BlogCard";
+import FeaturedPost from "@/components/FeaturedPost";
+import Hero from "@/components/Hero";
+import LatestList from "@/components/LatestList";
+import TrendingList from "@/components/TrendingList";
+
 // export default function HomePage() {
 //   return (
 //     <section className="space-y-10">
@@ -46,13 +52,32 @@
 
 export default function HomePage() {
   return (
-    <section className="container mx-auto px-4 py-10">
-      <h1 className="text-3xl font-bold text-cyan-700 mb-4">
-        Welcome to BlogSphere
-      </h1>
-      <p className="text-gray-700 leading-relaxed">
-        This is your homepage. Customize it as needed.
-      </p>
-    </section>
+    <main className="container mx-auto px-4 py-10">
+      <Hero />
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <TrendingList />
+
+        {/* Main Blog Section */}
+        <section className="lg:col-span-6 space-y-6">
+          <FeaturedPost />
+
+          <div className="grid sm:grid-cols-2 gap-6">
+            <BlogCard
+              img="/images/bm-2.png"
+              category="Success / 3 days ago"
+              title="How Top CEOs Solve Problems Differently"
+            />
+            <BlogCard
+              img="/images/bm-3.png"
+              category="Entrepreneurs / 1 month ago"
+              title="The 70-Year-Old Strategy That’s Still Working"
+            />
+          </div>
+        </section>
+
+        <LatestList />
+      </div>
+    </main>
   );
 }
