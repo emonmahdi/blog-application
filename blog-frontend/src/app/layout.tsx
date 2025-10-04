@@ -30,6 +30,7 @@
 import { HeaderTop } from "@/components/HeaderTop";
 import "./globals.css";
 import { Navbar } from "@/components/NavBar";
+import Footer from "@/components/Footer";
 
 export const metadata = {
   title: "BlogSphere",
@@ -52,6 +53,9 @@ export default function RootLayout({
 
         {/* Page Content */}
         <main className="flex-1">{children}</main>
+
+        {/* Footer */}
+        <Footer />
       </body>
     </html>
   );
