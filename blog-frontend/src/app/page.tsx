@@ -3,6 +3,7 @@ import LatestList from "@/components/LatestList";
 import FeaturedPost from "@/components/FeaturedPost";
 import BlogCard from "@/components/BlogCard";
 import MoreNewsSection from "@/components/MoreNewsSection";
+import SubscribeSection from "@/components/SubscribeSection";
 
 export default function HomePage() {
   return (
@@ -42,6 +43,9 @@ export default function HomePage() {
 
       {/* More News Section */}
       <MoreNewsSection />
+
+      {/* Subscribe section */}
+      <SubscribeSection />
     </main>
   );
 }
